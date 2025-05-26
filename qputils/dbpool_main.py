@@ -8,31 +8,10 @@ from common_constant import *
 
 MIN_POOL_CONNS = 1
 MAX_POOL_CONNS = 12
-
-
 MAX_QUERY_RECORDS = 1000
-MAX_QUERY_RECORDS_NOLIMIT = 999999999
-
-
-
-# -----------
-
-num_total_dbopens = 0
-num_total_queries = 0
-num_total_errors = 0
-num_total_records = 0
-
-iCount = 0
-
 db_pool = None
 
-
-# print("**************** LOADED py_dbpools_main **************")
-
-
-# define a function that handles and parses psycopg2 exceptions
 def print_psycopg2_exception(err):
-    # get details about the exception
     err_type, err_obj, traceback = sys.exc_info()
 
     line_num = traceback.tb_lineno
@@ -46,14 +25,10 @@ def print_psycopg2_exception(err):
 
 def db_populate_table_column_lists(table_name: str):
     global db_pool
-
-    # we have previously iterated thru this table for it's column names so reuse that now
     if (table_name is not None) and (table_name in db_pool.table_columns):
         return db_pool.table_columns[table_name]
 
-    # we have not yet iterated thru this table for it's column names
-    sql_str = sql.SQL(
-        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %s;")
+    sql_str = sql.SQL( "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %s;")
     response = db_execute_sql_new(sql_str=sql_str, data=(str(table_name),))
     col_names = []
     if s_records in response:
@@ -63,96 +38,8 @@ def db_populate_table_column_lists(table_name: str):
     db_pool.table_columns[table_name] = col_names
     return db_pool.table_columns[table_name]
 
-class dbpool_handler():
-
-    def __init__(self, host: str, port: int, user: str, password: str, database: str):
-        self.db_pg_pool = None
-        self.table_columns = {}
-
-
-        # , sslmode='require'
-        self.db_pg_pool = psycopg2.pool.SimpleConnectionPool(MIN_POOL_CONNS, MAX_POOL_CONNS, host=host, port=port,
-                                                             user=user, password=password, database=database)
-        if (self.db_pg_pool):
-            pass
-        else:
-            global num_total_errors
-            num_total_errors += 1
-        return
-
-    def __del__(self):
-        if self.db_pg_pool is not None:
-            self.db_pg_pool.closeall()
-            self.db_pg_pool = None
-        return
-
-    def db_connect(self):
-        global num_total_errors
-        global num_total_dbopens
-
-        db_conn = None
-        while True:
-            try:
-                num_total_dbopens += 1
-                db_conn = self.db_pg_pool.getconn()
-                if (not db_conn):
-                    print("FAILED - could not get a db_conn")  # was ic
-                break
-            except psycopg2.OperationalError as error:
-                print(
-                    f"exception in db_connect: psycopg2.OperationalError=[{psycopg2.OperationalError}] Exception=[{error}]")
-                num_total_errors += 1
-            except (Exception, psycopg2.DatabaseError) as error:
-                print(
-                    f"exception in db_connect: psycopg2.DatabaseError=[{psycopg2.DatabaseError}] Exception=[{error}]")
-                num_total_errors += 1
-        return db_conn
-
-    def db_disconnect(self, db_conn, rollback: bool = False):
-        if db_conn is not None:
-            if rollback:  # some error has occurred
-                db_conn.rollback()
-            else:  # no errors, commit transaction
-                db_conn.commit()
-            self.db_pg_pool.putconn(db_conn)
-            db_conn = None
-        return None
-
-
-class dbconn_handler():
-
-    def __init__(self, db_pool):
-        self.db_pool = db_pool
-        self.db_pg_conn = None
-        self.rollback = False
-        if (self.db_pool is None):
-            print("db_pool is none - bad!!! Error!")  # was ic
-            return
-        self.db_pg_conn = db_pool.db_connect()
-        return
-
-    def setrollback(self, rollback: bool):
-        self.rollback = rollback
-        return
-
-    def __del__(self):
-        if (self.db_pool is None) or (self.db_pg_conn is None):
-            print(
-                "connected already disconnected or not created yet or db_pool is none!!! Error!")  # was ic
-            return
-        self.db_pool.db_disconnect(self.db_pg_conn, rollback=self.rollback)
-        self.db_pg_conn = None
-        return
-
-
-# -----------------------
-
 
 class db_handler:
-    """
-        class for handling db_connections, commits and rollbacks
-    """
-
     def __init__(self, db_host: str, db_port: int, db_name: str, db_user: str, db_password: str,
                  db_admin_default_db_name: str):
         self.db_conn = None
@@ -187,9 +74,8 @@ class db_handler:
 
         except Exception as err:
             print(f"❌ psycopg2 ERROR: {err}")
-            print(f"❌ psycopg2 type: {type(err)}")
             try:
-                print(f"🔍 psycopg2 diag: {err.diag}")  # Only for psycopg2 errors
+                print(f"🔍 psycopg2 diag: {err.diag}")
             except AttributeError:
                 pass
 
@@ -207,19 +93,6 @@ class db_handler:
         sql_str = f"CREATE DATABASE {db_new_name};"
         self.db_superadmin_execute_sql(sql.SQL(sql_str))
         sql_str = f"ALTER DATABASE {db_new_name} SET timezone TO 'Asia/Calcutta';"
-        self.db_superadmin_execute_sql(sql_str)
-        return
-
-    def db_superadmin_terminate_connections(self, db_name=None):
-        if db_name is None: db_name = self.db_name
-        sql_str = f"SELECT * FROM pg_stat_activity WHERE datname = '{db_name}';"
-        self.db_superadmin_execute_sql(sql_str)
-        sql_str = f"SELECT pg_terminate_backend (pid) FROM pg_stat_activity WHERE datname = '{db_name}';"
-        self.db_superadmin_execute_sql(sql_str)
-        return
-
-    def db_superadmin_rename(self, db_cur_name, db_new_name):
-        sql_str = f"ALTER DATABASE {db_cur_name} RENAME TO {db_new_name};"
         self.db_superadmin_execute_sql(sql_str)
         return
 
@@ -286,10 +159,7 @@ class db_handler:
             if (db_cur is not None): db_cur.close()
         return
 
-    def db_disconnect(self):
-        """
-            This function commits/rollbacks the transaction and closes DB connection
-        """
+    def db_disconnect(self): # This function commits/rollbacks the transaction and closes DB connection
         self.stop_at = time.time()
         process_time = (self.stop_at - self.start_at) * MAX_QUERY_RECORDS
 
@@ -331,14 +201,12 @@ class db_handler:
         return
 
     def create_sequence(self, seq_name, start="1", max_val="2147483647"):
-        ##sql_str = "CREATE SEQUENCE IF NOT EXISTS public." + str(seq_name) + " INCREMENT 1" + " START " + str(start) + " MINVALUE 1" + " MAXVALUE " + str(max_val) + " CACHE 1;"
         sql_str = sql.SQL(
             f"CREATE SEQUENCE IF NOT EXISTS {seq_name} INCREMENT 1 START {start} MINVALUE 1 MAXVALUE {max_val} CACHE 1;")
         self.execute_sql(sql_str)
         return
 
     def create_table(self, table_name, add_standard_triggers=True, add_standard_fields=True):
-        ##sql_str = "CREATE TABLE IF NOT EXISTS public." + str(table_name) + "()"
         sql_str = sql.SQL(f"CREATE TABLE IF NOT EXISTS {table_name}()")
         self.execute_sql(sql_str)
 
@@ -444,12 +312,7 @@ class db_handler:
         enum_tuple_str = ', '.join([f"'{value}'" for value in enum_list])
         sql_str = f"CREATE TYPE {type_name} AS ENUM ({enum_tuple_str});"
         self.execute_sql(sql_str)
-        #log_pyutils.debug(f"create_type_enum: sql_str=[{sql_str}]")
         return(type_name)
-
-
-
-
 
 
     def pack_details_in_record_dict (self, record_dict: dict, table_name: str) -> dict:
@@ -467,112 +330,8 @@ class db_handler:
             new_record_dict.update({s_details: details_dict})
         return(new_record_dict)
 
-    def insert_record(table_name: str, record_dict: dict):
-        if not record_dict:
-            return {'success': False, 'total_count': 0, 'count': 0, 'records': []}
-
-        packed_record_dict = pack_details_in_record_dict(record_dict=record_dict, table_name=table_name)
-
-        fields = sql.SQL(', ').join(sql.Identifier(k) for k in packed_record_dict)
-        num_vals = sql.SQL(', ').join(sql.Placeholder() * len(packed_record_dict))
-
-        if 'details' in packed_record_dict:
-            packed_record_dict['details'] = json.dumps(packed_record_dict['details'])
-
-        sql_str = sql.SQL( "INSERT INTO {table} ({cols}) VALUES ({vals}) RETURNING *" ).format( table=sql.Identifier(table_name), cols=fields, vals=num_vals )
-
-        # Execute insert
-        response = db_execute_sql_new(sql_str=sql_str, data=tuple(packed_record_dict.values()), num_records=None)
-        response = self.pack_json(response)
-
-        if response.get(s_status) == s_success and response.get(s_count, 0) > 0:
-            return response
-
-        return {s_status: s_failure, s_status_code: HTTP_STATUS_CODE_422}
-
-
-
-    # --- UPDATE FUNCTION ---
-    def update_record(table: str, record_dict: dict, record_id: dict) -> dict:
-        if len(record_id) != 1:
-            raise ValueError("Only single primary key supported in record_id")
-
-        set_clauses = [sql.SQL("{} = %s").format(sql.Identifier(k)) for k in record_dict.keys()]
-        set_clause = sql.SQL(', ').join(set_clauses)
-
-        pk_field, pk_value = list(record_id.items())[0]
-        values = tuple(record_dict.values()) + (pk_value,)
-
-        query = sql.SQL("UPDATE {table} SET {set_clause} WHERE {pk_field} = %s RETURNING id").format(
-            table=sql.Identifier(table),
-            set_clause=set_clause,
-            pk_field=sql.Identifier(pk_field)
-        )
-
-        return db_execute_sql_new(query, values, 1)
-
-
-    # --- DELETE FUNCTION ---
-    def delete_record(table: str, record_id: dict) -> dict:
-        if len(record_id) != 1:
-            raise ValueError("Only single primary key supported in record_id")
-
-        pk_field, pk_value = list(record_id.items())[0]
-
-        query = sql.SQL("DELETE FROM {table} WHERE {pk_field} = %s RETURNING id").format(
-            table=sql.Identifier(table),
-            pk_field=sql.Identifier(pk_field)
-        )
-
-        return db_execute_sql_new(query, (pk_value,), 1)
-
-
-    def db_get_records_by_key_val(table_name: str, query_dict: dict = None):
-        query_dict = {key: value for key, value in query_dict.items() if value is not None}
-        num_records = MAX_QUERY_RECORDS
-        if "num_records" in query_dict.keys():
-            num_records = query_dict.pop("num_records")
-        if num_records == 0:
-            response = {s_status: s_success, "count": 0, s_status_code: HTTP_STATUS_CODE_200,
-                        s_message: "Zero records requsted. "}
-            return response
-        if query_dict:
-            base_query = sql.SQL( "SELECT * FROM public.{table} WHERE {params} ORDER BY updated_at ASC LIMIT " + str(num_records)).format( table=sql.Identifier(table_name), params=sql.SQL(' AND ').join(
-                    sql.Composed([sql.Identifier(k), sql.SQL(" = "), sql.Placeholder(k)]) for k in query_dict.keys()))
-        else:
-            base_query = sql.SQL("SELECT * FROM public.{table} LIMIT " + str(num_records)).format(
-                table=sql.Identifier(table_name))
-
-        response = db_execute_sql_new(sql_str=base_query, data=dict(query_dict.items()))
-        if (response[s_status] == s_success) and (response[s_count] != 0):
-            return response
-        return {s_status: s_failure, s_status_code: HTTP_STATUS_CODE_404, s_message: 'details not found'}
-
-def db_startup_dbpools():
-    global db_pool
-
-    print("startup_dbpools: started")
-    if db_pool is None:
-        print("DB_POOL STARTED *******************")
-        db_profile_name = "QIKPOD"
-        db_host = os.getenv(db_profile_name + '_DB_HOST', None)
-        db_port = int(str(os.getenv(db_profile_name + '_DB_PORT', "25060")))
-        db_user = os.getenv(db_profile_name + '_DB_USER', None)
-        db_password = os.getenv(db_profile_name + '_DB_PASSWORD', None)
-        db_name = os.getenv(db_profile_name + '_DB_NAME', None)
-        # if py_utils is being used where db is not needed then do not auto instantiate db_pool
-        if db_host is not None:
-            db_pool = dbpool_handler(host=db_host, port=db_port, user=db_user, password=db_password, database=db_name)
-            print(
-                f"Loading Pool DB: host={db_host}, port={db_port}, user={db_user}, password={db_password}, database={db_name}")
-        else:
-            print("DB POOL SKIPPED- ENV VARS MISSING *******************")
-    print("startup_dbpools: completed")
-    return
-
 
 # ----- START OF NEW SECTION TO SUPPORT AD HOC DB TRANSACTION COMMIT/ROLLBACK -----
-
 
 def db_execute_sql_open_transaction() -> object:
     global db_pool
@@ -646,8 +405,7 @@ def db_unpack_json (response):
     response[s_records] = new_records
     return response
 
-def db_execute_sql_with_transaction(db_cur: object, sql_str: psycopg2.sql.SQL = None, data: tuple = None,
-                                    num_records: int = None) -> dict:
+def db_execute_sql_with_transaction(db_cur: object, sql_str: psycopg2.sql.SQL = None, data: tuple = None, num_records: int = None) -> dict:
     global db_pool
 
     if (db_cur is None):
@@ -657,7 +415,6 @@ def db_execute_sql_with_transaction(db_cur: object, sql_str: psycopg2.sql.SQL = 
     records = []
     response = {s_status: s_success}
 
-    # if the user is asking for no records, then we can respond with an empty query without even querying the db
     if (num_records == 0):
         response = {s_status: s_success, s_count: 0, s_records: []}
         return response
@@ -671,7 +428,6 @@ def db_execute_sql_with_transaction(db_cur: object, sql_str: psycopg2.sql.SQL = 
                     db_cur.description is not None)):  # rowcount will be 1 or greater if delete was successful
                 records = db_cur.fetchall()
             else:
-                # any other non zero positive number will be passed to the fetch query
                 records = db_cur.fetchmany(num_records)
 
         if (db_cur.rowcount == 0):  # No matching record found
@@ -682,9 +438,7 @@ def db_execute_sql_with_transaction(db_cur: object, sql_str: psycopg2.sql.SQL = 
             response = {s_status: s_failure}
             return response
 
-        # here total_count returns the count as per db_cur query response.
-        # count is the number of records fetched - which could be < total_count since the user
-        # may have requested fewer than all the records be returned or pagination maybe implemented
+
         response.update({s_count: len(records)})
         response.update({s_rowcount: db_cur.rowcount})
         response.update({s_records: records})
@@ -709,7 +463,6 @@ def db_execute_sql_new(sql_str: psycopg2.sql.SQL = None, data: tuple = None, num
     db_conn = None
     response = {s_status: s_success}
 
-    # if the user is asking for no records, then we can respond with an empty query without even querying the db
     if (num_records == 0):
         response = {s_status: s_success, s_count: 0, s_records: []}
         return response
@@ -733,3 +486,80 @@ def db_execute_sql_new(sql_str: psycopg2.sql.SQL = None, data: tuple = None, num
 # ----- END OF NEW SECTION TO SUPPORT AD HOC DB TRANSACTION COMMIT/ROLLBACK -----
 
 
+def insert_record(table_name: str, record_dict: dict):
+        if not record_dict:
+            return {'success': False, 'total_count': 0, 'count': 0, 'records': []}
+
+        packed_record_dict = pack_details_in_record_dict(record_dict=record_dict, table_name=table_name)
+
+        fields = sql.SQL(', ').join(sql.Identifier(k) for k in packed_record_dict)
+        num_vals = sql.SQL(', ').join(sql.Placeholder() * len(packed_record_dict))
+
+        if 'details' in packed_record_dict:
+            packed_record_dict['details'] = json.dumps(packed_record_dict['details'])
+
+        sql_str = sql.SQL( "INSERT INTO {table} ({cols}) VALUES ({vals}) RETURNING *" ).format( table=sql.Identifier(table_name), cols=fields, vals=num_vals )
+
+        # Execute insert
+        response = db_execute_sql_new(sql_str=sql_str, data=tuple(packed_record_dict.values()), num_records=None)
+        response = self.pack_json(response)
+
+        if response.get(s_status) == s_success and response.get(s_count, 0) > 0:
+            return response
+
+        return {s_status: s_failure, s_status_code: HTTP_STATUS_CODE_422}
+
+
+# --- UPDATE FUNCTION ---
+def update_record(table: str, record_dict: dict, record_id: dict) -> dict:
+    if len(record_id) != 1:
+        raise ValueError("Only single primary key supported in record_id")
+
+    set_clauses = [sql.SQL("{} = %s").format(sql.Identifier(k)) for k in record_dict.keys()]
+    set_clause = sql.SQL(', ').join(set_clauses)
+
+    pk_field, pk_value = list(record_id.items())[0]
+    values = tuple(record_dict.values()) + (pk_value,)
+
+    query = sql.SQL("UPDATE {table} SET {set_clause} WHERE {pk_field} = %s RETURNING id").format(
+        table=sql.Identifier(table),
+        set_clause=set_clause,
+        pk_field=sql.Identifier(pk_field)
+    )
+
+    return db_execute_sql_new(query, values, 1)
+
+
+# --- DELETE FUNCTION ---
+def delete_record(table: str, record_id: dict) -> dict:
+    if len(record_id) != 1:
+        raise ValueError("Only single primary key supported in record_id")
+
+    pk_field, pk_value = list(record_id.items())[0]
+
+    query = sql.SQL("DELETE FROM {table} WHERE {pk_field} = %s RETURNING id").format(
+        table=sql.Identifier(table),
+        pk_field=sql.Identifier(pk_field)
+    )
+
+    return db_execute_sql_new(query, (pk_value,), 1)
+
+
+def db_get_records_by_key_val(table_name: str, query_dict: dict = None):
+    query_dict = {key: value for key, value in query_dict.items() if value is not None}
+    num_records = MAX_QUERY_RECORDS
+    if "num_records" in query_dict.keys():
+        num_records = query_dict.pop("num_records")
+    if num_records == 0:
+        response = {s_status: s_success, s_count: 0, s_status_code: HTTP_STATUS_CODE_200, s_message: "Zero records requsted. "}
+        return response
+    if query_dict:
+        base_query = sql.SQL( "SELECT * FROM public.{table} WHERE {params} ORDER BY updated_at ASC LIMIT " + str(num_records)).format( table=sql.Identifier(table_name), params=sql.SQL(' AND ').join(
+                sql.Composed([sql.Identifier(k), sql.SQL(" = "), sql.Placeholder(k)]) for k in query_dict.keys()))
+    else:
+        base_query = sql.SQL("SELECT * FROM public.{table} LIMIT " + str(num_records)).format(table=sql.Identifier(table_name))
+
+    response = db_execute_sql_new(sql_str=base_query, data=dict(query_dict.items()))
+    if (response[s_status] == s_success) and (response[s_count] != 0):
+        return response
+    return {s_status: s_failure, s_status_code: HTTP_STATUS_CODE_404, s_message: 'details not found'}
