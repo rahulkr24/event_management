@@ -7,8 +7,7 @@ from typing import Optional
 import bcrypt,pytz
 from datetime import datetime, timedelta
 import random,hashlib
-
-from common_constant import *
+from dbpool_main import *
 
 TABLE_NAME_USERS = "users"
 
@@ -31,7 +30,8 @@ def get_expiry_date_as_str() -> str:
     expiry_date = datetime.now(tz) + timedelta(days=30)
     return expiry_date.strftime('%Y-%m-%d %H:%M:%S')
 
-def add_user(user_name: str, user_phone: str, user_email: str, password: str,  user_role: UserRole = None):
+@db_wrapper_connect_and_exceptions
+def add_user(dbh: db_handler_standard, user_name: str, user_phone: str, user_email: str, password: str,  user_role: UserRole = None):
     h_password = hash_password(plain_password=password)
     expiry_date = get_expiry_date_as_str()
     if user_role:
@@ -39,18 +39,14 @@ def add_user(user_name: str, user_phone: str, user_email: str, password: str,  u
 
     data = { "user_name": user_name, "user_password": h_password, "user_permission": user_role, "user_phone": user_phone, "user_email": user_email,
              "user_password_expiry": expiry_date, "user_otp": generate_otp(), "status": "active"}
-    print("add_user", add_user)
-    response = insert_record(table_name=TABLE_NAME_USERS, record_dict=data)
+    response = dbh.insert_record(table_name=TABLE_NAME_USERS, record_dict=data)
     if ((response[s_status] == s_failure) or (response[s_count] == 0)):
         return { s_status: s_failure, s_status_code: HTTP_STATUS_CODE_422, s_message: "failed to create user" }
     return response
 
-def update_user(record_dict:dict, record_id:dict)-> dict:
-    return update_record(table_name="users", record_dict=record_dict, record_id=record_id)
+def update_user(dbh: db_handler_standard, record_dict:dict, record_id:dict)-> dict:
+    return dbh.update_record(table_name="users", record_dict=record_dict, record_id=record_id)
 
 
-def delete_user(record_dict:dict, record_id:dict)-> dict:
-    return delete_record(table_name="users", record_id=record_id)
-
-
-
+def delete_user(dbh: db_handler_standard, record_id:dict)-> dict:
+    return dbh.delete_record(table_name="users", record_id=record_id)

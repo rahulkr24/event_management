@@ -54,8 +54,10 @@ s_status = 'status'
 s_success = 'success'
 s_failure = 'failure'
 s_status_code = 'status_code'
+s_timestamp = "timestamp"
 s_message ='message'
 s_details = 'details'
+s_id ='id'
 
 HTTP_STATUS_CODE_200 = 200
 HTTP_STATUS_CODE_404 = 404
